@@ -11,6 +11,7 @@ from typing import Any
 from . import __version__, service
 from .analysis import InspectionError
 from .capture import CaptureError
+from .cases import load_cases
 from .config import DEFAULT_CONFIG_NAME, SAMPLE_CONFIG, ConfigError
 from .db import SafetyError
 from .report import to_markdown
@@ -43,14 +44,18 @@ def _print_human(data: Any, indent: int = 0) -> None:
         print(f"{pad}{data}")
 
 
-def _print_verify(result: dict[str, Any]) -> None:
+def _print_verify(result: dict[str, Any], *, only_failures: bool = False) -> None:
     status = "PASS" if result["passed"] else "FAIL"
     print(f"{status}  {result['procedure']}: {result['summary']}")
+    if only_failures and result["passed"]:
+        return
     if result.get("definition_changed"):
         print("      (the procedure definition changed since the baseline was captured)")
     for table in result.get("newly_written_tables", []):
         print(f"      note: the procedure now writes {table}, which the baseline did not watch")
     for case in result["cases"]:
+        if only_failures and case["passed"]:
+            continue
         mark = "ok " if case["passed"] else "XX "
         print(f"  {mark} {case['name']}")
         for diff in case["differences"]:
@@ -81,8 +86,28 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument("--watch", nargs="*", default=[], help="Extra tables to compare (schema.table)")
     p.add_argument("--overwrite", action="store_true", help="Replace an existing baseline")
+    p = sub.add_parser(
+        "capture-cases",
+        help="Capture a baseline for every cases file in the given files or folders",
+    )
+    p.add_argument(
+        "paths",
+        nargs="+",
+        help="Cases files or folders; each file is named after its procedure (usp_X.json)",
+    )
+    p.add_argument("--overwrite", action="store_true", help="Replace existing baselines")
+    p.add_argument(
+        "--skip-missing",
+        action="store_true",
+        help="Skip procedures that do not exist in the database instead of failing",
+    )
     p = sub.add_parser("verify", help="Compare the procedure against its baseline")
     p.add_argument("procedures", nargs="*", help="Procedures to verify (default: every baseline)")
+    p.add_argument(
+        "--only-failures",
+        action="store_true",
+        help="Show only procedure summaries and failing cases in text output",
+    )
     p.add_argument(
         "--markdown-report",
         metavar="PATH",
@@ -115,13 +140,27 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "suggest":
             _print(service.suggest(args.procedure, args.config), args.json)
         elif args.command == "capture":
-            cases = json.loads(Path(args.cases).read_text(encoding="utf-8"))
+            cases = load_cases(args.cases)
             _print(
                 service.capture_baseline(
                     args.procedure, cases, args.watch, args.overwrite, args.config
                 ),
                 args.json,
             )
+        elif args.command == "capture-cases":
+            results = service.capture_cases(
+                args.paths, args.overwrite, args.skip_missing, args.config
+            )
+            if args.json:
+                _print(results, True)
+            else:
+                for item in results:
+                    if item["status"] == "captured":
+                        print(f"captured  {item['procedure']}: {item['cases']} case(s)")
+                        for warning in item["warnings"]:
+                            print(f"          warning: {warning}")
+                    else:
+                        print(f"skipped   {item['procedure']}: {item['reason']}")
         elif args.command == "verify":
             names = args.procedures or [b["procedure"] for b in service.list_baselines(args.config)]
             if not names:
@@ -134,7 +173,7 @@ def main(argv: list[str] | None = None) -> int:
                 _print(results, True)
             else:
                 for result in results:
-                    _print_verify(result)
+                    _print_verify(result, only_failures=args.only_failures)
             return 0 if all(r["passed"] for r in results) else 2
         elif args.command == "tsqlt":
             _print(service.generate_tsqlt(args.procedure, args.config), args.json)

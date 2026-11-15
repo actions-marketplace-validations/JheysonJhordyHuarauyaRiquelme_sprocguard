@@ -6,7 +6,27 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-14
+
+### Added
+- GitHub Action `mode: base-branch`: captures the baselines from the base branch in the same
+  run (inputs `cases`, `base-ref`, `base-setup-scripts`), so nothing has to be committed.
+- GitHub Action input `fail-on-change: false` reports behavior changes without failing.
+- `sprocguard capture-cases <folder or files>` captures every cases file in one connection;
+  the procedure comes from the file name. `--skip-missing` skips procedures that do not exist.
+- `SPROCGUARD_BASELINE_DIR` stores baselines in another folder.
+- Integration jobs that run `mode: base-branch` against a real SQL Server.
+- `sprocguard verify --only-failures` keeps passing procedures to one line and shows
+  only failing cases and their differences in text output (#9, thanks @enidchen0125).
+- Troubleshooting section in the READMEs (#11, thanks @stepheng223).
+
+### Fixed
+- `sprocguard capture` reports a missing, unreadable or invalid `--cases` file with a
+  one-line error instead of a Python traceback (#10, thanks @bfs2021).
+
 ### Changed
+- The helper that reads cases files moved from `cli.py` to the new `cases` module, so the CLI
+  and `capture-cases` share it.
 - READMEs: "Three ways to use it" overview, GitHub Marketplace badge and links; the Spanish
   README gains badges, the roadmap and the pymssql install line.
 
@@ -43,7 +63,8 @@ and the project uses [Semantic Versioning](https://semver.org/).
 - MCP server with six tools, an Agent Skill and a Claude Code plugin.
 - Every run happens inside a transaction that is always rolled back.
 
-[Unreleased]: https://github.com/JheysonJhordyHuarauyaRiquelme/sprocguard/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/JheysonJhordyHuarauyaRiquelme/sprocguard/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/JheysonJhordyHuarauyaRiquelme/sprocguard/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/JheysonJhordyHuarauyaRiquelme/sprocguard/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/JheysonJhordyHuarauyaRiquelme/sprocguard/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/JheysonJhordyHuarauyaRiquelme/sprocguard/releases/tag/v0.1.0

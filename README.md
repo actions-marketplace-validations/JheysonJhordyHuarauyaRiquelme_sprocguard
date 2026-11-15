@@ -161,8 +161,11 @@ sprocguard init                                   create sprocguard.toml
 sprocguard inspect <proc> [--definition]          describe a procedure and its risks
 sprocguard suggest <proc>                         suggest parameter values
 sprocguard capture <proc> --cases cases.json      capture a baseline  [--watch schema.table ...] [--overwrite]
+sprocguard capture-cases <folder or files>        capture every cases file (usp_X.json -> dbo.usp_X)
+                                                  [--overwrite] [--skip-missing]
 sprocguard verify [<proc> ...]                    verify one, several or all baselines (exit 2 if behavior changed)
                                                   [--markdown-report report.md]
+                                                  [--only-failures]
 sprocguard tsqlt <proc>                           generate tSQLt tests (read-only procedures)
 sprocguard list                                   list baselines
 sprocguard serve                                  run the MCP server (stdio)
@@ -170,13 +173,26 @@ sprocguard serve                                  run the MCP server (stdio)
 
 Add `--json` for machine-readable output.
 
+Use `sprocguard verify --only-failures` to keep passing procedures to one `PASS` line
+and show only failing cases with their differences for changed procedures. JSON output
+and Markdown reports are unaffected.
+
 ## Verify on every pull request (GitHub Action)
 
 This repository is also a GitHub Action, listed on the
 [GitHub Marketplace](https://github.com/marketplace/actions/sprocguard-verify). It starts a throwaway SQL Server in Docker, builds
-your database from the scripts in your repository, and runs `sprocguard verify` against the
-baselines you committed. The pull request fails when a procedure changed behavior, and the
-job summary lists every difference.
+your database from the scripts in your repository and runs `sprocguard verify`. The pull
+request fails when a procedure changed behavior, and the job summary lists every difference.
+
+It compares against one of two references:
+
+- **The base branch** (`mode: base-branch`, from v0.3.0): nothing to prepare on your machine.
+- **Baselines committed in the repository** (the default, `mode: committed`).
+
+### Compare with the base branch
+
+The action builds the database with the scripts of the base branch, captures baselines with
+your cases files, rebuilds the database with the scripts of the pull request and verifies.
 
 ```yaml
 name: Stored procedures
@@ -188,7 +204,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: JheysonJhordyHuarauyaRiquelme/sprocguard@v0.2.0
+      - uses: JheysonJhordyHuarauyaRiquelme/sprocguard@v0.3.0
+        with:
+          mode: base-branch
+          cases: db/cases
+          setup-scripts: |
+            db/schema.sql
+            db/seed.sql
+            db/procedures/*.sql
+```
+
+`db/cases` holds one file per procedure, named after it (`usp_PlaceOrder.json` is
+`dbo.usp_PlaceOrder`, `sales.usp_Refund.json` is `sales.usp_Refund`), in the same format as
+`sprocguard capture --cases`. Procedures that do not exist on the base branch yet are skipped.
+If the pull request moves or renames the scripts, set `base-setup-scripts` to the paths on the
+base branch. Your scripts must create the same test data every time, because both sides are
+compared on the data they build.
+
+### Compare with committed baselines
+
+```yaml
+      - uses: actions/checkout@v7
+      - uses: JheysonJhordyHuarauyaRiquelme/sprocguard@v0.3.0
         with:
           setup-scripts: |
             db/schema.sql
@@ -207,8 +244,15 @@ To set it up:
    real connection string; point `config` at a separate file such as `sprocguard.ci.toml`
    if you prefer. The `[safety]` rules still apply.
 
+### Inputs and outputs
+
 | Input | Default | What it does |
 | --- | --- | --- |
+| `mode` | `committed` | `committed` or `base-branch` (see above) |
+| `cases` | | Cases files or folders, one per line (`base-branch`) |
+| `base-ref` | the pull request's base branch | Branch, tag or commit to capture from (`base-branch`) |
+| `base-setup-scripts` | `setup-scripts` | Scripts that build the database on the base branch (`base-branch`) |
+| `fail-on-change` | `true` | Set to `false` to only report changes in the job summary |
 | `config` | `sprocguard.toml` | Configuration file in your repository |
 | `setup-scripts` | | Scripts that build the database, one per line; globs allowed |
 | `procedures` | every baseline | Procedures to verify, separated by spaces or new lines |
@@ -226,13 +270,65 @@ of this repository uses the action on the demo database and is a complete exampl
 To run sprocguard against another server in CI, set environment variables instead of
 editing the configuration: `SPROCGUARD_ODBC` (an ODBC connection string), or
 `SPROCGUARD_SERVER`, `SPROCGUARD_PORT`, `SPROCGUARD_USER`, `SPROCGUARD_DATABASE` and
-`SPROCGUARD_PASSWORD` (a pymssql connection).
+`SPROCGUARD_PASSWORD` (a pymssql connection). `SPROCGUARD_BASELINE_DIR` stores baselines in
+another folder without changing `[storage]`.
 
 ## tSQLt export
 
 For read-only procedures, `sprocguard tsqlt <proc>` writes a `.sql` file with one
 [tSQLt](https://tsqlt.org) test per case, using `tSQLt.AssertEqualsTable` and
 `tSQLt.ExpectException`. Volatile columns are left out of the comparison.
+
+## Troubleshooting
+
+Common connection problems and how to fix them.
+
+**ODBC driver not found**
+
+Check which drivers are installed:
+
+```powershell
+Get-OdbcDriver | Where-Object Name -like "*SQL Server*"
+```
+
+If `ODBC Driver 17 for SQL Server` is the one installed, use it in
+`sprocguard.toml` in place of 18:
+
+```toml
+odbc = "Driver={ODBC Driver 17 for SQL Server};Server=localhost;Database=DemoShop;Trusted_Connection=yes;TrustServerCertificate=yes"
+```
+
+**Login failed (SQL authentication)**
+
+Install the pymssql extra and set the password in the environment variable
+named by `password_env` (default `SPROCGUARD_PASSWORD`):
+
+```powershell
+pip install "sprocguard[pymssql]"
+$env:SPROCGUARD_PASSWORD = "..."     # PowerShell
+# export SPROCGUARD_PASSWORD=...     # bash / zsh
+```
+
+In `sprocguard.toml`, set `server`, `user`, and `password_env`.
+
+**"Connected to database '...', which is not in [safety].allowed_databases"**
+
+sprocguard refuses to run against any database not listed in
+`[safety].allowed_databases`, on purpose. If it is a development database, add it:
+
+```toml
+[safety]
+allowed_databases = ["DemoShop", "MyOtherDb"]
+```
+
+**Certificate errors with ODBC Driver 18**
+
+For local development servers, add `TrustServerCertificate=yes` to the ODBC
+connection string:
+
+```toml
+odbc = "Driver={ODBC Driver 18 for SQL Server};Server=localhost;Database=DemoShop;Trusted_Connection=yes;TrustServerCertificate=yes"
+```
 
 ## Limitations
 
@@ -247,11 +343,11 @@ For read-only procedures, `sprocguard tsqlt <proc>` writes a `.sql` file with on
 - [ ] tSQLt export with `FakeTable` for procedures that modify data
 - [ ] Table-valued parameters
 - [ ] `sprocguard impact <table>`: verify every procedure that uses a table you are changing
-- [ ] Verify a pull request without committed baselines: capture on the base branch, verify on the head branch
 - [ ] PostgreSQL support
 - [x] Publish to PyPI and the MCP Registry
 - [x] GitHub Action that verifies procedures on every pull request
 - [x] List the GitHub Action on the GitHub Marketplace
+- [x] Verify a pull request without committed baselines (`mode: base-branch`)
 
 ## Contributing
 
